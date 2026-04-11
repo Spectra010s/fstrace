@@ -5,7 +5,7 @@ use std::{
     path::Path,
     process,
     thread,
-    time::{Duration, SystemTime},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -25,15 +25,41 @@ fn print_help() {
 A lightweight file system watcher for files and folders.
 
 {BOLD}Usage:{RESET}
-  fstrace <path>          Watch a file or folder
-  fstrace -v, --version   Show version
-  fstrace -h, --help      Show this help message
+  fstrace <path> [options]   Watch a file or folder
+  fstrace -v, --version      Show version
+  fstrace -h, --help         Show this help message
+
+{BOLD}Options:{RESET}
+  --json    Output events as JSON (for programmatic use)
 
 {BOLD}Events:{RESET}
   {GREEN}[created]{RESET}   A file was created
   {YELLOW}[modified]{RESET}  A file was modified
   {RED}[deleted]{RESET}   A file was deleted
 ");
+}
+
+fn timestamp() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+fn emit(event: &str, path: &str, json: bool) {
+    if json {
+        println!(
+            "{{\"event\":\"{event}\",\"path\":\"{path}\",\"timestamp\":{}}}",
+            timestamp()
+        );
+    } else {
+        match event {
+            "created" => println!("{GREEN}[created]{RESET}   {path}"),
+            "modified" => println!("{YELLOW}[modified]{RESET}  {path}"),
+            "deleted" => println!("{RED}[deleted]{RESET}   {path}"),
+            _ => {}
+        }
+    }
 }
 
 fn get_modified(path: &Path) -> Option<SystemTime> {
@@ -57,31 +83,37 @@ fn snapshot(dir: &Path) -> HashMap<String, Option<SystemTime>> {
     map
 }
 
-fn watch_file(path: &Path) {
-    println!("{CYAN}{BOLD}fstrace{RESET} {DIM}v{VERSION}{RESET}");
-    println!("{DIM}Watching file: {}{RESET}\n", path.display());
+fn watch_file(path: &Path, json: bool) {
+    if !json {
+        println!("{CYAN}{BOLD}fstrace{RESET} {DIM}v{VERSION}{RESET}");
+        println!("{DIM}Watching file: {}{RESET}\n", path.display());
+    }
 
     let mut last = get_modified(path);
 
     loop {
         thread::sleep(Duration::from_millis(500));
 
+        let path_str = path.to_string_lossy();
+
         if !path.exists() {
-            println!("{RED}[deleted]{RESET}  {}", path.display());
+            emit("deleted", &path_str, json);
             break;
         }
 
         let current = get_modified(path);
         if current != last {
-            println!("{YELLOW}[modified]{RESET} {}", path.display());
+            emit("modified", &path_str, json);
             last = current;
         }
     }
 }
 
-fn watch_folder(path: &Path) {
-    println!("{CYAN}{BOLD}fstrace{RESET} {DIM}v{VERSION}{RESET}");
-    println!("{DIM}Watching folder: {}{RESET}\n", path.display());
+fn watch_folder(path: &Path, json: bool) {
+    if !json {
+        println!("{CYAN}{BOLD}fstrace{RESET} {DIM}v{VERSION}{RESET}");
+        println!("{DIM}Watching folder: {}{RESET}\n", path.display());
+    }
 
     let mut prev = snapshot(path);
 
@@ -90,23 +122,17 @@ fn watch_folder(path: &Path) {
 
         let current = snapshot(path);
 
-        // Check for created or modified
         for (key, modified) in &current {
             match prev.get(key) {
-                None => {
-                    println!("{GREEN}[created]{RESET}   {key}");
-                }
-                Some(old) if old != modified => {
-                    println!("{YELLOW}[modified]{RESET}  {key}");
-                }
+                None => emit("created", key, json),
+                Some(old) if old != modified => emit("modified", key, json),
                 _ => {}
             }
         }
 
-        // Check for deleted
         for key in prev.keys() {
             if !current.contains_key(key) {
-                println!("{RED}[deleted]{RESET}   {key}");
+                emit("deleted", key, json);
             }
         }
 
@@ -125,15 +151,16 @@ fn main() {
             println!("fstrace v{VERSION}");
         }
         Some(path) => {
+            let json = args.contains(&"--json".to_string());
             let p = Path::new(path);
             if !p.exists() {
                 eprintln!("{RED}Error:{RESET} path not found: {path}");
                 process::exit(1);
             }
             if p.is_dir() {
-                watch_folder(p);
+                watch_folder(p, json);
             } else {
-                watch_file(p);
+                watch_file(p, json);
             }
         }
         None => {
