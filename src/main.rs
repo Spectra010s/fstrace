@@ -53,10 +53,11 @@ fn emit(event: &str, path: &str, json: bool) {
             timestamp()
         );
     } else {
+        let time = now();
         match event {
-            "created" => println!("{GREEN}[created]{RESET}   {path}"),
-            "modified" => println!("{YELLOW}[modified]{RESET}  {path}"),
-            "deleted" => println!("{RED}[deleted]{RESET}   {path}"),
+            "created" => println!("{DIM}[{time}]{RESET} {GREEN}[created]{RESET}   {path}"),
+            "modified" => println!("{DIM}[{time}]{RESET} {YELLOW}[modified]{RESET}  {path}"),
+            "deleted" => println!("{DIM}[{time}]{RESET} {RED}[deleted]{RESET}   {path}"),
             _ => {}
         }
     }
@@ -66,9 +67,25 @@ fn get_modified(path: &Path) -> Option<SystemTime> {
     fs::metadata(path).ok()?.modified().ok()
 }
 
+fn now() -> String {
+    let duration = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let secs = duration % 86400;
+    let h = secs / 3600;
+    let m = (secs % 3600) / 60;
+    let s = secs % 60;
+    format!("{h:02}:{m:02}:{s:02}")
+}
+
 fn snapshot(dir: &Path) -> HashMap<String, Option<SystemTime>> {
     let mut map = HashMap::new();
+    collect(dir, &mut map);
+    map
+}
 
+fn collect(dir: &Path, map: &mut HashMap<String, Option<SystemTime>>) {
     if let Ok(entries) = fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
@@ -76,11 +93,11 @@ fn snapshot(dir: &Path) -> HashMap<String, Option<SystemTime>> {
                 let key = path.to_string_lossy().to_string();
                 let modified = get_modified(&path);
                 map.insert(key, modified);
+            } else if path.is_dir() {
+                collect(&path, map);
             }
         }
     }
-
-    map
 }
 
 fn watch_file(path: &Path, json: bool) {
