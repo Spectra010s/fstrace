@@ -1,0 +1,140 @@
+name: Android Release
+
+permissions:
+  contents: write
+
+on:
+  push:
+    tags:
+      - "**[0-9]+.[0-9]+.[0-9]+*"
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk
+
+      - name: Build Android Binary
+        run: cargo ndk -t aarch64-linux-android --platform 28 build --release
+
+      - name: Create Tarball & Checksum
+        run: |
+          mkdir -p dist/bundle
+          cp target/aarch64-linux-android/release/fstrace dist/bundle/fstrace
+          cp README.md LICENSE* dist/bundle/ || true
+
+          cd dist
+          TAR_NAME="fstrace-aarch64-linux-android.tar.gz"
+          tar -czf "$TAR_NAME" -C bundle .
+          sha256sum "$TAR_NAME" > "$TAR_NAME.sha256"
+          cd ..
+
+      - name: Generate Installer Script
+        run: |
+          cat > dist/fstrace-android-installer.sh <<EOF
+          #!/bin/sh
+          set -e
+          REPO="Spectra010s/fstrace"
+          TAG="${{ github.ref_name }}"
+          BINARY_NAME="fstrace-aarch64-linux-android.tar.gz"
+          URL="https://github.com/\$REPO/releases/download/\$TAG/\$BINARY_NAME"
+
+          echo "Installing fstrace (\$TAG) for Android..."
+
+          TMP_DIR=\$(mktemp -d "\$PREFIX/tmp/fstrace-install-XXXXXX")
+          FILE="\$TMP_DIR/fstrace.tar.gz"
+
+          curl -sSfL "\$URL" -o "\$FILE"
+          curl -sSfL "\$URL.sha256" -o "\$TMP_DIR/check.sha256"
+
+          EXPECTED_HASH=\$(awk '{print \$1}' "\$TMP_DIR/check.sha256")
+          ACTUAL_HASH=\$(sha256sum "\$FILE" | awk '{print \$1}')
+
+          if [ "\$EXPECTED_HASH" != "\$ACTUAL_HASH" ]; then
+              echo "ERROR: Checksum mismatch!"
+              exit 1
+          fi
+
+          tar -xzf "\$FILE" -C "\$TMP_DIR"
+          mv "\$TMP_DIR/fstrace" "\$PREFIX/bin/fstrace"
+          chmod +x "\$PREFIX/bin/fstrace"
+          rm -rf "\$TMP_DIR"
+
+          echo "Success! Type 'fstrace' to start."
+          EOF
+
+          chmod +x dist/fstrace-android-installer.sh
+
+      - name: Wait for cargo-dist Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          for i in {1..20}; do
+            if gh release view ${{ github.ref_name }} > /dev/null 2>&1; then
+              echo "Release found!"
+              exit 0
+            fi
+            sleep 30
+          done
+          echo "Release not found."
+          exit 1
+
+      - name: Upload Android Artifacts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload ${{ github.ref_name }} \
+            dist/fstrace-aarch64-linux-android.tar.gz \
+            dist/fstrace-aarch64-linux-android.tar.gz.sha256 \
+            dist/fstrace-android-installer.sh \
+            --clobber
+
+      - name: Edit Release Body
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REF: ${{ github.ref_name }}
+        run: |
+          gh release view "$REF" --json body --jq '.body' > body.md
+
+          sed -i '/### Install prebuilt binaries via shell script (Android \/ Termux)/d' body.md
+          sed -i '/fstrace-android-installer\.sh/d' body.md
+          sed -i '/aarch64-linux-android\.tar\.gz/d' body.md
+
+          cat > android_section.md <<EOF
+
+          ### Install prebuilt binaries via shell script (Android / Termux)
+            
+          \`\`\`sh
+          curl -LsSf \
+          https://github.com/Spectra010s/fstrace/releases/download/$REF/fstrace-android-installer.sh | sh
+          \`\`\`
+           
+          EOF
+
+          awk '
+          /^## Download/ {
+            system("cat android_section.md")
+          }
+          { print }
+          ' body.md > new_body.md
+
+          cat > table_row.md <<EOF
+          | [fstrace-aarch64-linux-android.tar.gz](https://github.com/Spectra010s/fstrace/releases/download/$REF/fstrace-aarch64-linux-android.tar.gz) | Android (Termux) | [checksum](https://github.com/Spectra010s/fstrace/releases/download/$REF/fstrace-aarch64-linux-android.tar.gz.sha256) |
+          EOF
+
+          sed -i "/x86_64-unknown-linux-gnu\.tar\.xz/r table_row.md" new_body.md
+
+          gh release edit "$REF" --notes-file new_body.md
+
+          rm -f android_section.md table_row.md body.md

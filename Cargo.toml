@@ -1,11 +1,24 @@
 [package]
 name = "fstrace"
-version = "0.1.0"
+version = "1.0.0"
 description = "A lightweight file system watcher for files and folders."
 edition = "2024"
-author = ["Spectra010s"]
+authors = ["Spectra010s"]
 license = "MIT"
 repository = "https://github.com/Spectra010s/fstrace"
 homepage = "https://github.com/Spectra010s/fstrace"
 keywords = ["cli", "filesystem", "watcher", "tools", "fstrace"]
 categories = ["command-line-utilities"]
+
+[package.metadata.wix]
+product-name = "fstrace"
+upgrade-guid = "74A4CD85-DBBD-48DA-A2A3-7CE467C58001"
+path-guid = "468A3BF4-F1A3-4620-A0F4-0A232A2B9BCB"
+license = true
+license-file = "./LICENSE"
+eula = false
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
