@@ -1,0 +1,7 @@
+[package]
+name = "fstrace"
+version = "0.1.0"
+description = "A lightweight file system watcher for files and folders."
+edition = "2024"
+
+[dependencies]
