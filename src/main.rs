@@ -30,7 +30,13 @@ A lightweight file system watcher for files and folders.
   fstrace -h, --help         Show this help message
 
 {BOLD}Options:{RESET}
-  --json    Output events as JSON (for programmatic use)
+  --json                  Output events as JSON
+  --exclude <name>        Exclude a file or folder (can be repeated)
+
+{BOLD}Examples:{RESET}
+  fstrace ./project
+  fstrace ./project --exclude node_modules --exclude .git
+  fstrace ./project --json
 
 {BOLD}Events:{RESET}
   {GREEN}[created]{RESET}   A file was created
@@ -79,22 +85,30 @@ fn now() -> String {
     format!("{h:02}:{m:02}:{s:02}")
 }
 
-fn snapshot(dir: &Path) -> HashMap<String, Option<SystemTime>> {
+fn snapshot(dir: &Path, excludes: &[String]) -> HashMap<String, Option<SystemTime>> {
     let mut map = HashMap::new();
-    collect(dir, &mut map);
+    collect(dir, &mut map, excludes);
     map
 }
 
-fn collect(dir: &Path, map: &mut HashMap<String, Option<SystemTime>>) {
+fn collect(dir: &Path, map: &mut HashMap<String, Option<SystemTime>>, excludes: &[String]) {
     if let Ok(entries) = fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
+            let name = path.file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("");
+
+            if excludes.iter().any(|e| e == name) {
+                continue;
+            }
+
             if path.is_file() {
                 let key = path.to_string_lossy().to_string();
                 let modified = get_modified(&path);
                 map.insert(key, modified);
             } else if path.is_dir() {
-                collect(&path, map);
+                collect(&path, map, excludes);
             }
         }
     }
@@ -126,18 +140,18 @@ fn watch_file(path: &Path, json: bool) {
     }
 }
 
-fn watch_folder(path: &Path, json: bool) {
+fn watch_folder(path: &Path, json: bool, excludes: &[String]) {
     if !json {
         println!("{CYAN}{BOLD}fstrace{RESET} {DIM}v{VERSION}{RESET}");
         println!("{DIM}Watching folder: {}{RESET}\n", path.display());
     }
 
-    let mut prev = snapshot(path);
+    let mut prev = snapshot(path, excludes);
 
     loop {
         thread::sleep(Duration::from_millis(500));
 
-        let current = snapshot(path);
+        let current = snapshot(path, excludes);
 
         for (key, modified) in &current {
             match prev.get(key) {
@@ -169,13 +183,27 @@ fn main() {
         }
         Some(path) => {
             let json = args.contains(&"--json".to_string());
+
+            let mut excludes: Vec<String> = Vec::new();
+            let mut i = 2;
+            while i < args.len() {
+                if args[i] == "--exclude" {
+                    if let Some(val) = args.get(i + 1) {
+                        excludes.push(val.clone());
+                        i += 2;
+                        continue;
+                    }
+                }
+                i += 1;
+            }
+
             let p = Path::new(path);
             if !p.exists() {
                 eprintln!("{RED}Error:{RESET} path not found: {path}");
                 process::exit(1);
             }
             if p.is_dir() {
-                watch_folder(p, json);
+                watch_folder(p, json, &excludes);
             } else {
                 watch_file(p, json);
             }
