@@ -3,5 +3,9 @@ name = "fstrace"
 version = "0.1.0"
 description = "A lightweight file system watcher for files and folders."
 edition = "2024"
-
-[dependencies]
+author = ["Spectra010s"]
+license = "MIT"
+repository = "https://github.com/Spectra010s/fstrace"
+homepage = "https://github.com/Spectra010s/fstrace"
+keywords = ["cli", "filesystem", "watcher", "tools", "fstrace"]
+categories = ["command-line-utilities"]
