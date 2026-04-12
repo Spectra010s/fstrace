@@ -4,17 +4,40 @@ A lightweight file system watcher for files and folders.
 
 ## Installation
 
+**Linux / macOS:**
+```sh
+curl -fsSL https://spectra010s.github.io/fstrace/install.sh | sh
+```
+
+**Android (Termux):**
+```sh
+curl -fsSL https://spectra010s.github.io/fstrace/install.sh | sh
+```
+
+**Windows:**
+```ps1
+iex (irm https://spectra010s.github.io/fstrace/install.ps1)
+```
+
+**npm:**
+```sh
+npm install -g @hiverra/fstrace
+```
+
+**cargo:**
+```sh
+cargo install fstrace
+```
+
+**Build from source:**
 ```bash
 git clone https://github.com/Spectra010s/fstrace.git
 cd fstrace
 cargo build --release
-```
-
-Then move the binary to your PATH:
-
-```bash
 cp target/release/fstrace $PREFIX/bin/fstrace
 ```
+
+---
 
 ## Usage
 
@@ -23,34 +46,45 @@ fstrace <path> [options]
 ```
 
 **Watch a file:**
-
 ```bash
 fstrace file.txt
 ```
 
 **Watch a folder:**
-
 ```bash
 fstrace ./myproject
 ```
 
-**JSON output (for programmatic use):**
+**Exclude folders or files:**
+```bash
+fstrace ./myproject --exclude node_modules --exclude .git
+```
 
+**JSON output:**
 ```bash
 fstrace ./myproject --json
 ```
 
+**Combine flags:**
+```bash
+fstrace ./myproject --exclude node_modules --json
+```
+
+---
+
 ## Events
 
-| Event      | Description              |
-|------------|--------------------------|
-| `created`  | A file was created       |
-| `modified` | A file was modified      |
-| `deleted`  | A file was deleted       |
+| Event      | Description         |
+|------------|---------------------|
+| `created`  | A file was created  |
+| `modified` | A file was modified |
+| `deleted`  | A file was deleted  |
+
+---
 
 ## JSON Output
 
-When using `--json`, each event is printed as a single line of JSON:
+When using `--json`, each event is a single line of JSON:
 
 ```json
 {"event":"modified","path":"/home/user/project/index.js","timestamp":1744392000}
@@ -69,13 +103,18 @@ proc.stdout.on("data", (data) => {
 });
 ```
 
+---
+
 ## Options
 
-| Flag             | Description       |
-|------------------|-------------------|
-| `--json`         | Output as JSON    |
-| `-v, --version`  | Show version      |
-| `-h, --help`     | Show help         |
+| Flag                    | Description                          |
+|-------------------------|--------------------------------------|
+| `--exclude <name>`      | Exclude a file or folder (repeatable)|
+| `--json`                | Output events as JSON                |
+| `-v, --version`         | Show version                         |
+| `-h, --help`            | Show help                            |
+
+---
 
 ## License
 
