@@ -9,6 +9,12 @@ repository = "https://github.com/Spectra010s/fstrace"
 homepage = "https://github.com/Spectra010s/fstrace"
 keywords = ["cli", "filesystem", "watcher", "tools", "fstrace"]
 categories = ["command-line-utilities"]
+exclude = [
+    "docs/*",
+    ".github/*",
+    "wix/*",
+    "dist-workspace.toml",
+]
 
 [package.metadata.wix]
 product-name = "fstrace"
