@@ -1,12 +1,12 @@
 use std::{
     collections::HashMap,
     env,
-    fs,
     path::Path,
-    process,
-    thread,
+    process, thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
+
+use fstrace::{Event, diff, mtime, snapshot};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -20,7 +20,8 @@ const CYAN: &str = "\x1b[36m";
 const DIM: &str = "\x1b[2m";
 
 fn print_help() {
-    println!("
+    println!(
+        "
 {BOLD}fstrace{RESET} {DIM}v{VERSION}{RESET}
 A lightweight file system watcher for files and folders.
 
@@ -42,35 +43,8 @@ A lightweight file system watcher for files and folders.
   {GREEN}[created]{RESET}   A file was created
   {YELLOW}[modified]{RESET}  A file was modified
   {RED}[deleted]{RESET}   A file was deleted
-");
-}
-
-fn timestamp() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
-}
-
-fn emit(event: &str, path: &str, json: bool) {
-    if json {
-        println!(
-            "{{\"event\":\"{event}\",\"path\":\"{path}\",\"timestamp\":{}}}",
-            timestamp()
-        );
-    } else {
-        let time = now();
-        match event {
-            "created" => println!("{DIM}[{time}]{RESET} {GREEN}[created]{RESET}   {path}"),
-            "modified" => println!("{DIM}[{time}]{RESET} {YELLOW}[modified]{RESET}  {path}"),
-            "deleted" => println!("{DIM}[{time}]{RESET} {RED}[deleted]{RESET}   {path}"),
-            _ => {}
-        }
-    }
-}
-
-fn get_modified(path: &Path) -> Option<SystemTime> {
-    fs::metadata(path).ok()?.modified().ok()
+"
+    );
 }
 
 fn now() -> String {
@@ -85,30 +59,34 @@ fn now() -> String {
     format!("{h:02}:{m:02}:{s:02}")
 }
 
-fn snapshot(dir: &Path, excludes: &[String]) -> HashMap<String, Option<SystemTime>> {
-    let mut map = HashMap::new();
-    collect(dir, &mut map, excludes);
-    map
+fn timestamp() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }
 
-fn collect(dir: &Path, map: &mut HashMap<String, Option<SystemTime>>, excludes: &[String]) {
-    if let Ok(entries) = fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let name = path.file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("");
-
-            if excludes.iter().any(|e| e == name) {
-                continue;
+fn emit(event: &Event, json: bool) {
+    let path = match event {
+        Event::Created { path } | Event::Modified { path } | Event::Deleted { path } => path,
+    };
+    if json {
+        println!(
+            "{{\"event\":\"{}\",\"path\":\"{path}\",\"timestamp\":{}}}",
+            event.kind(),
+            timestamp()
+        );
+    } else {
+        let time = now();
+        match event {
+            Event::Created { .. } => {
+                println!("{DIM}[{time}]{RESET} {GREEN}[created]{RESET}   {path}")
             }
-
-            if path.is_file() {
-                let key = path.to_string_lossy().to_string();
-                let modified = get_modified(&path);
-                map.insert(key, modified);
-            } else if path.is_dir() {
-                collect(&path, map, excludes);
+            Event::Modified { .. } => {
+                println!("{DIM}[{time}]{RESET} {YELLOW}[modified]{RESET}  {path}")
+            }
+            Event::Deleted { .. } => {
+                println!("{DIM}[{time}]{RESET} {RED}[deleted]{RESET}   {path}")
             }
         }
     }
@@ -120,7 +98,7 @@ fn watch_file(path: &Path, json: bool) {
         println!("{DIM}Watching file: {}{RESET}\n", path.display());
     }
 
-    let mut last = get_modified(path);
+    let mut last = mtime(path);
 
     loop {
         thread::sleep(Duration::from_millis(500));
@@ -128,13 +106,23 @@ fn watch_file(path: &Path, json: bool) {
         let path_str = path.to_string_lossy();
 
         if !path.exists() {
-            emit("deleted", &path_str, json);
+            emit(
+                &Event::Deleted {
+                    path: path_str.into_owned(),
+                },
+                json,
+            );
             break;
         }
 
-        let current = get_modified(path);
+        let current = mtime(path);
         if current != last {
-            emit("modified", &path_str, json);
+            emit(
+                &Event::Modified {
+                    path: path_str.into_owned(),
+                },
+                json,
+            );
             last = current;
         }
     }
@@ -146,27 +134,15 @@ fn watch_folder(path: &Path, json: bool, excludes: &[String]) {
         println!("{DIM}Watching folder: {}{RESET}\n", path.display());
     }
 
-    let mut prev = snapshot(path, excludes);
+    let mut prev: HashMap<String, Option<SystemTime>> = snapshot(path, excludes);
 
     loop {
         thread::sleep(Duration::from_millis(500));
 
         let current = snapshot(path, excludes);
-
-        for (key, modified) in &current {
-            match prev.get(key) {
-                None => emit("created", key, json),
-                Some(old) if old != modified => emit("modified", key, json),
-                _ => {}
-            }
+        for event in diff(&prev, &current) {
+            emit(&event, json);
         }
-
-        for key in prev.keys() {
-            if !current.contains_key(key) {
-                emit("deleted", key, json);
-            }
-        }
-
         prev = current;
     }
 }
@@ -187,12 +163,12 @@ fn main() {
             let mut excludes: Vec<String> = Vec::new();
             let mut i = 2;
             while i < args.len() {
-                if args[i] == "--exclude" {
-                    if let Some(val) = args.get(i + 1) {
-                        excludes.push(val.clone());
-                        i += 2;
-                        continue;
-                    }
+                if args[i] == "--exclude"
+                    && let Some(val) = args.get(i + 1)
+                {
+                    excludes.push(val.clone());
+                    i += 2;
+                    continue;
                 }
                 i += 1;
             }
@@ -215,4 +191,3 @@ fn main() {
         }
     }
 }
-
