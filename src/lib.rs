@@ -3,6 +3,9 @@
 //! The polling engine behind the `fstrace` CLI, exposed for embedding:
 //! snapshot a tree, diff two snapshots, drive your own loop and timing.
 //!
+//! Polling (not OS event hooks) is deliberate: zero dependencies and
+//! identical behavior on every platform the CLI ships to.
+//!
 //! ```no_run
 //! use std::path::Path;
 //! use fstrace::{snapshot, diff};
@@ -38,12 +41,14 @@ impl Event {
 }
 
 /// Last-modified time of `path`, or `None` when unreadable.
+/// `None` is still tracked (not skipped) so a file flipping between
+/// unreadable and readable registers as modified rather than vanishing.
 pub fn mtime(path: &Path) -> Option<SystemTime> {
     fs::metadata(path).ok()?.modified().ok()
 }
 
 /// Map of `path -> mtime` for every file under `dir`, skipping `excludes`
-/// (matched against bare file/folder names, same rule as the CLI).
+/// (see [`matches_exclude`] for the matching rules).
 pub fn snapshot(dir: &Path, excludes: &[String]) -> HashMap<String, Option<SystemTime>> {
     let mut map = HashMap::new();
     collect(dir, &mut map, excludes);
@@ -53,6 +58,8 @@ pub fn snapshot(dir: &Path, excludes: &[String]) -> HashMap<String, Option<Syste
 /// Whether `pattern` excludes the given path. Plain patterns keep the
 /// original rule (exact bare-name match); patterns containing `*` or `?`
 /// match as globs against the full path first, then the bare name.
+/// A `/`-pattern also matches rooted anywhere below the watch root because
+/// users mean "every `dist` tree", never "only a top-level one".
 pub fn matches_exclude(path: &str, name: &str, pattern: &str) -> bool {
     if !pattern.contains(['*', '?']) {
         return name == pattern;
@@ -70,6 +77,13 @@ pub fn matches_exclude(path: &str, name: &str, pattern: &str) -> bool {
 }
 
 /// Minimal glob: `*` spans any characters (including `/`), `?` spans one.
+/// Hand-rolled backtracking instead of a regex/glob crate to keep the
+/// zero-dependency core. Two deliberate limits, documented so nobody
+/// "fixes" them by accident:
+/// - byte-wise: `?` spans one byte, not one Unicode char (no panic risk,
+///   only imprecision on non-ASCII names — fine for an exclude filter);
+/// - `*` spans `/`, so `*.log` also matches `deep/app.log` and `dist/**`
+///   matches every `dist` tree (matched anywhere-below-root by the caller).
 fn glob_match(pattern: &str, text: &str) -> bool {
     let (px, tx) = (pattern.as_bytes(), text.as_bytes());
     let (mut star, mut mark) = (None, 0usize);
@@ -96,6 +110,8 @@ fn glob_match(pattern: &str, text: &str) -> bool {
     pi == px.len()
 }
 
+// Walk `dir` into `map`. Unreadable directories are skipped silently:
+// one permission-denied folder must not kill the whole watch.
 fn collect(dir: &Path, map: &mut HashMap<String, Option<SystemTime>>, excludes: &[String]) {
     if let Ok(entries) = fs::read_dir(dir) {
         for entry in entries.flatten() {
@@ -119,6 +135,9 @@ fn collect(dir: &Path, map: &mut HashMap<String, Option<SystemTime>>, excludes: 
 
 /// Pure diff: every change from `prev` to `curr`, in the same order the
 /// CLI has always emitted (current entries first, deletions after).
+/// Two passes because the questions differ: created/modified ask "what's
+/// in curr that's new or changed", deleted asks "what's in prev that's
+/// gone from curr".
 pub fn diff(
     prev: &HashMap<String, Option<SystemTime>>,
     curr: &HashMap<String, Option<SystemTime>>,
