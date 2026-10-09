@@ -50,19 +50,66 @@ pub fn snapshot(dir: &Path, excludes: &[String]) -> HashMap<String, Option<Syste
     map
 }
 
+/// Whether `pattern` excludes the given path. Plain patterns keep the
+/// original rule (exact bare-name match); patterns containing `*` or `?`
+/// match as globs against the full path first, then the bare name.
+pub fn matches_exclude(path: &str, name: &str, pattern: &str) -> bool {
+    if !pattern.contains(['*', '?']) {
+        return name == pattern;
+    }
+    if glob_match(pattern, path) || glob_match(pattern, name) {
+        return true;
+    }
+    // A pattern with a `/` also matches rooted anywhere below the watch
+    // root: `dist/**` excludes every `dist` tree, not just a top-level one.
+    if pattern.contains('/') {
+        let anywhere = format!("*/{pattern}");
+        return glob_match(&anywhere, path);
+    }
+    false
+}
+
+/// Minimal glob: `*` spans any characters (including `/`), `?` spans one.
+fn glob_match(pattern: &str, text: &str) -> bool {
+    let (px, tx) = (pattern.as_bytes(), text.as_bytes());
+    let (mut star, mut mark) = (None, 0usize);
+    let (mut pi, mut ti) = (0usize, 0usize);
+    while ti < tx.len() {
+        if pi < px.len() && (px[pi] == b'?' || px[pi] == tx[ti]) {
+            pi += 1;
+            ti += 1;
+        } else if pi < px.len() && px[pi] == b'*' {
+            star = Some(pi);
+            mark = ti;
+            pi += 1;
+        } else if let Some(s) = star {
+            pi = s + 1;
+            mark += 1;
+            ti = mark;
+        } else {
+            return false;
+        }
+    }
+    while pi < px.len() && px[pi] == b'*' {
+        pi += 1;
+    }
+    pi == px.len()
+}
+
 fn collect(dir: &Path, map: &mut HashMap<String, Option<SystemTime>>, excludes: &[String]) {
     if let Ok(entries) = fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
             let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            let path_str = path.to_string_lossy();
 
-            if excludes.iter().any(|e| e == name) {
+            if excludes.iter().any(|e| matches_exclude(&path_str, name, e)) {
                 continue;
             }
 
             if path.is_file() {
-                let key = path.to_string_lossy().to_string();
-                map.insert(key, mtime(&path));
+                let modified = mtime(&path);
+                map.insert(path_str.into_owned(), modified);
             } else if path.is_dir() {
                 collect(&path, map, excludes);
             }
@@ -145,5 +192,25 @@ mod tests {
             diff(&prev, &curr),
             vec![Event::Modified { path: "a".into() }]
         );
+    }
+
+    #[test]
+    fn exclude_matching() {
+        // exact names behave as before
+        assert!(matches_exclude(
+            "/w/node_modules/a.js",
+            "node_modules",
+            "node_modules"
+        ));
+        assert!(!matches_exclude("/w/src/a.js", "a.js", "node_modules"));
+        // star patterns match names and paths
+        assert!(matches_exclude("/w/app.log", "app.log", "*.log"));
+        assert!(matches_exclude("/w/deep/app.log", "app.log", "*.log"));
+        assert!(!matches_exclude("/w/app.txt", "app.txt", "*.log"));
+        assert!(matches_exclude("/w/dist/out.js", "out.js", "dist/**"));
+        assert!(!matches_exclude("/w/src/out.js", "out.js", "dist/**"));
+        // question mark spans exactly one character
+        assert!(matches_exclude("/w/a1", "a1", "a?"));
+        assert!(!matches_exclude("/w/a12", "a12", "a?"));
     }
 }
