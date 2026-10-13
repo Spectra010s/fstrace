@@ -1,6 +1,14 @@
 # fstrace
 
-A lightweight file system watcher for files and folders.
+A lightweight file system watcher for files and folders, as a CLI and a Rust library.
+
+- [CLI usage](#usage)
+- [Rust API docs](https://docs.rs/fstrace)
+
+It reports three events: created, modified, deleted.
+From the command line as text or JSON, or embedded in your own tools through the library.
+Mirror files somewhere on change.
+Anything that starts with "tell me when this folder changes" starts here.
 
 ## Installation
 
@@ -33,9 +41,32 @@ cargo install fstrace
 ```bash
 git clone https://github.com/Spectra010s/fstrace.git
 cd fstrace
-cargo build --release
-cp target/release/fstrace $PREFIX/bin/fstrace
+cargo install --path .
 ```
+
+---
+
+## As a library
+
+```toml
+fstrace = "1.1"
+```
+
+```rust
+use std::path::Path;
+use fstrace::{snapshot, diff};
+
+let excludes: Vec<String> = vec!["node_modules".into()];
+let prev = snapshot(Path::new("./project"), &excludes);
+// ... later ...
+let curr = snapshot(Path::new("./project"), &excludes);
+for event in diff(&prev, &curr) {
+    println!("{} {}", event.kind(), event.path());
+}
+```
+
+Snapshot a tree, diff two snapshots, drive your own loop and timing.
+Full API docs on [docs.rs](https://docs.rs/fstrace).
 
 ---
 
@@ -58,6 +89,11 @@ fstrace ./myproject
 **Exclude folders or files:**
 ```bash
 fstrace ./myproject --exclude node_modules --exclude .git
+```
+
+Patterns work too (`*` spans anything, `?` spans one character):
+```bash
+fstrace ./myproject --exclude '*.log' --exclude 'dist/**'
 ```
 
 **JSON output:**
@@ -107,12 +143,18 @@ proc.stdout.on("data", (data) => {
 
 ## Options
 
-| Flag                    | Description                          |
-|-------------------------|--------------------------------------|
-| `--exclude <name>`      | Exclude a file or folder (repeatable)|
-| `--json`                | Output events as JSON                |
-| `-v, --version`         | Show version                         |
-| `-h, --help`            | Show help                            |
+| Flag                    | Description                                              |
+|-------------------------|----------------------------------------------------------|
+| `--exclude <pattern>`   | Exclude a file or folder, `*`/`?` patterns allowed (repeatable) |
+| `--json`                | Output events as JSON                                    |
+| `-v, --version`         | Show version                                             |
+| `-h, --help`            | Show help                                                |
+
+---
+
+## Origins
+
+fstrace started as a personal experiment: watch a folder, track the changes, and know how long I really worked in a repo. It grew into a tiny watcher, and the library behind it.
 
 ---
 
@@ -123,4 +165,3 @@ MIT — see the [LICENSE](LICENSE) file for details.
 ---
 
 Written by [Spectra010s](https://spectra010s.vercel.app)
-
