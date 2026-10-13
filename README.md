@@ -168,4 +168,4 @@ MIT — see the [LICENSE](LICENSE) file for details.
 
 ---
 
-Written by [Spectra010s](https://spectra010s.com)
+Author: [Adeloye Adetayo](https://spectra010s.com)
