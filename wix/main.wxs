@@ -62,15 +62,15 @@
         Id='*'
         Name='fstrace'
         UpgradeCode='74A4CD85-DBBD-48DA-A2A3-7CE467C58001'
-        Manufacturer='Spectra010s'
+        Manufacturer='Adeloye Adetayo'
         Language='1033'
         Codepage='1252'
         Version='$(var.Version)'>
 
         <Package Id='*'
             Keywords='Installer'
-            Description='A lightweight file system watcher for files and folders.'
-            Manufacturer='Spectra010s'
+            Description='A lightweight file system watcher for files and folders, as a CLI and a Rust library.'
+            Manufacturer='Adeloye Adetayo'
             InstallerVersion='450'
             Languages='1033'
             Compressed='yes'
