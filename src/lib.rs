@@ -35,6 +35,14 @@ pub enum Event {
 }
 
 impl Event {
+    /// The affected path, whichever variant carries it. Saves matching
+    /// all three variants just to read one field.
+    pub fn path(&self) -> &str {
+        match self {
+            Event::Created { path } | Event::Modified { path } | Event::Deleted { path } => path,
+        }
+    }
+
     /// `"created"`, `"modified"` or `"deleted"`.
     pub fn kind(&self) -> &'static str {
         match self {
@@ -277,15 +285,7 @@ pub fn diff_ordered(
     curr: &HashMap<String, FileState>,
 ) -> Vec<Event> {
     let mut events = diff(prev, curr);
-    events.sort_by(|a, b| {
-        let pa = match a {
-            Event::Created { path } | Event::Modified { path } | Event::Deleted { path } => path,
-        };
-        let pb = match b {
-            Event::Created { path } | Event::Modified { path } | Event::Deleted { path } => path,
-        };
-        pa.cmp(pb)
-    });
+    events.sort_by(|a, b| a.path().cmp(b.path()));
     events
 }
 
@@ -314,18 +314,12 @@ mod tests {
         }
     }
 
-    fn event_path(e: &Event) -> &str {
-        match e {
-            Event::Created { path } | Event::Modified { path } | Event::Deleted { path } => path,
-        }
-    }
-
     #[test]
     fn detects_created_modified_deleted() {
         let prev = snap(&[("a", st(1, 10)), ("b", st(1, 10)), ("c", st(1, 10))]);
         let curr = snap(&[("a", st(1, 10)), ("b", st(2, 10)), ("d", st(1, 10))]);
         let mut events = diff(&prev, &curr);
-        events.sort_by(|a, b| (a.kind(), event_path(a)).cmp(&(b.kind(), event_path(b))));
+        events.sort_by(|a, b| (a.kind(), a.path()).cmp(&(b.kind(), b.path())));
         assert_eq!(
             events,
             vec![
@@ -345,19 +339,26 @@ mod tests {
         let first = diff_ordered(&prev, &curr);
         let second = diff_ordered(&prev, &curr);
         assert_eq!(first, second);
-        let paths: Vec<&str> = first.iter().map(event_path).collect();
+        let paths: Vec<&str> = first.iter().map(|e| e.path()).collect();
         assert_eq!(paths, vec!["a", "b", "c"]);
         let mut def: Vec<String> = diff(&prev, &curr)
             .iter()
-            .map(|e| format!("{}:{}", e.kind(), event_path(e)))
+            .map(|e| format!("{}:{}", e.kind(), e.path()))
             .collect();
         def.sort();
         let mut ord: Vec<String> = first
             .iter()
-            .map(|e| format!("{}:{}", e.kind(), event_path(e)))
+            .map(|e| format!("{}:{}", e.kind(), e.path()))
             .collect();
         ord.sort();
         assert_eq!(def, ord);
+    }
+
+    #[test]
+    fn path_reads_off_all_variants() {
+        assert_eq!(Event::Created { path: "c".into() }.path(), "c");
+        assert_eq!(Event::Modified { path: "m".into() }.path(), "m");
+        assert_eq!(Event::Deleted { path: "d".into() }.path(), "d");
     }
 
     #[test]

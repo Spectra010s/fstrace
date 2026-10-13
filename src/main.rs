@@ -59,9 +59,7 @@ fn now() -> String {
 }
 
 fn emit(event: &Event, json: bool) {
-    let path = match event {
-        Event::Created { path } | Event::Modified { path } | Event::Deleted { path } => path,
-    };
+    let path = event.path();
     if json {
         println!(
             "{{\"event\":\"{}\",\"path\":\"{path}\",\"timestamp\":{}}}",
