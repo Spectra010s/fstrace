@@ -260,6 +260,26 @@ pub fn diff(prev: &HashMap<String, FileState>, curr: &HashMap<String, FileState>
     events
 }
 
+/// Like [`diff`], but sorted by path. Opt-in: the default stays in
+/// emission order so existing consumers see zero behavior change. Reach
+/// for this when batching output or asserting on it in tests.
+pub fn diff_ordered(
+    prev: &HashMap<String, FileState>,
+    curr: &HashMap<String, FileState>,
+) -> Vec<Event> {
+    let mut events = diff(prev, curr);
+    events.sort_by(|a, b| {
+        let pa = match a {
+            Event::Created { path } | Event::Modified { path } | Event::Deleted { path } => path,
+        };
+        let pb = match b {
+            Event::Created { path } | Event::Modified { path } | Event::Deleted { path } => path,
+        };
+        pa.cmp(pb)
+    });
+    events
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -305,6 +325,30 @@ mod tests {
                 Event::Modified { path: "b".into() },
             ]
         );
+    }
+
+    #[test]
+    fn ordered_mode_is_stable_and_matches_default_set() {
+        // Same input twice: identical order both times, and the same set
+        // the default mode reports (order aside).
+        let prev = snap(&[("b", st(1, 10)), ("a", st(1, 10))]);
+        let curr = snap(&[("b", st(2, 10)), ("c", st(1, 10))]);
+        let first = diff_ordered(&prev, &curr);
+        let second = diff_ordered(&prev, &curr);
+        assert_eq!(first, second);
+        let paths: Vec<&str> = first.iter().map(event_path).collect();
+        assert_eq!(paths, vec!["a", "b", "c"]);
+        let mut def: Vec<String> = diff(&prev, &curr)
+            .iter()
+            .map(|e| format!("{}:{}", e.kind(), event_path(e)))
+            .collect();
+        def.sort();
+        let mut ord: Vec<String> = first
+            .iter()
+            .map(|e| format!("{}:{}", e.kind(), event_path(e)))
+            .collect();
+        ord.sort();
+        assert_eq!(def, ord);
     }
 
     #[test]
