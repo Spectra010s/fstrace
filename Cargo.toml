@@ -1,6 +1,6 @@
 [package]
 name = "fstrace"
-version = "1.0.0"
+version = "1.1.0"
 description = "A lightweight file system watcher for files and folders."
 edition = "2024"
 authors = ["Spectra010s"]
