@@ -19,7 +19,12 @@
 //! }
 //! ```
 
-use std::{collections::HashMap, fs, path::Path, time::SystemTime};
+use std::{
+    collections::{HashMap, HashSet},
+    fs,
+    path::{Path, PathBuf},
+    time::SystemTime,
+};
 
 /// A single filesystem change between two snapshots.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -127,7 +132,8 @@ pub fn snapshot_hashed(dir: &Path, excludes: &[String]) -> HashMap<String, FileS
 // first time someone fixes a bug in one and forgets the other.
 fn snapshot_inner(dir: &Path, excludes: &[String], hash: bool) -> HashMap<String, FileState> {
     let mut map = HashMap::new();
-    collect(dir, &mut map, excludes, hash);
+    let mut visited = HashSet::new();
+    collect(dir, &mut map, excludes, hash, &mut visited);
     map
 }
 
@@ -188,7 +194,23 @@ fn glob_match(pattern: &str, text: &str) -> bool {
 
 // Walk `dir` into `map`. Unreadable directories are skipped silently:
 // one permission-denied folder must not kill the whole watch.
-fn collect(dir: &Path, map: &mut HashMap<String, FileState>, excludes: &[String], hash: bool) {
+// Walk `dir` into `map`. Unreadable directories are skipped silently:
+// one permission-denied folder must not kill the whole watch.
+// `visited` holds canonicalized directories already entered: a shortcut
+// pointing back above itself resolves to a visited path, so the walk
+// stops instead of circling forever. Canonicalize (not dev/ino) keeps
+// this portable across the platforms the CLI ships to.
+fn collect(
+    dir: &Path,
+    map: &mut HashMap<String, FileState>,
+    excludes: &[String],
+    hash: bool,
+    visited: &mut HashSet<PathBuf>,
+) {
+    let canonical = fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+    if !visited.insert(canonical) {
+        return;
+    }
     if let Ok(entries) = fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
@@ -207,7 +229,7 @@ fn collect(dir: &Path, map: &mut HashMap<String, FileState>, excludes: &[String]
                 };
                 map.insert(path_str.into_owned(), state);
             } else if path.is_dir() {
-                collect(&path, map, excludes, hash);
+                collect(&path, map, excludes, hash, visited);
             }
         }
     }
@@ -345,6 +367,22 @@ mod tests {
         assert_eq!(fhash(&a), fhash(&b));
         assert_eq!(fhash(&a), fhash(&a));
         assert_ne!(fhash(&a), fhash(&dir.join("c.txt")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn circular_shortcut_finishes_scan() {
+        // A shortcut pointing back above itself must not circle forever.
+        // Unix-only: creating symlinks needs privileges on Windows.
+        let dir = std::env::temp_dir().join(format!("fstrace-loop-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let inner = dir.join("a").join("b");
+        std::fs::create_dir_all(&inner).unwrap();
+        std::fs::write(inner.join("real.txt"), "data").unwrap();
+        std::os::unix::fs::symlink(dir.join("a"), inner.join("loop")).unwrap();
+        let map = snapshot(&dir, &[]);
+        assert!(map.keys().any(|k| k.ends_with("real.txt")));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
