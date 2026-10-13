@@ -1,7 +1,9 @@
 //! fstrace library: low-level filesystem snapshot + diff primitives.
 //!
-//! The polling engine behind the `fstrace` CLI, exposed for embedding:
-//! snapshot a tree, diff two snapshots, drive your own loop and timing.
+//! The polling engine behind the `fstrace` CLI, exposed for embedding.
+//! Capture with [`snapshot`] (or [`snapshot_hashed`] for fingerprint-level
+//! change detection), compare with [`diff`] (or [`diff_ordered`] for stable
+//! output), filter with [`matches_exclude`]. You drive the loop and timing.
 //!
 //! Polling (not OS event hooks) is deliberate: zero dependencies and
 //! identical behavior on every platform the CLI ships to.
@@ -15,7 +17,7 @@
 //! // ... later ...
 //! let curr = snapshot(Path::new("./project"), &excludes);
 //! for event in diff(&prev, &curr) {
-//!     println!("{}", event.kind());
+//!     println!("{} {}", event.kind(), event.path());
 //! }
 //! ```
 
