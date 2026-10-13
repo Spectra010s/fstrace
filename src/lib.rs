@@ -417,7 +417,7 @@ mod tests {
         let b = dir.join("b.txt");
         std::fs::write(&a, "same content").unwrap();
         std::fs::write(&b, "same content").unwrap();
-        std::fs::write(&dir.join("c.txt"), "different").unwrap();
+        std::fs::write(dir.join("c.txt"), "different").unwrap();
         assert_eq!(fhash(&a), fhash(&b));
         assert_eq!(fhash(&a), fhash(&a));
         assert_ne!(fhash(&a), fhash(&dir.join("c.txt")));
