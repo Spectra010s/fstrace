@@ -5,7 +5,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use fstrace::{Event, diff, mtime, snapshot};
+use fstrace::{Event, diff, mtime, snapshot, timestamp};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -56,13 +56,6 @@ fn now() -> String {
     let m = (secs % 3600) / 60;
     let s = secs % 60;
     format!("{h:02}:{m:02}:{s:02}")
-}
-
-fn timestamp() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
 }
 
 fn emit(event: &Event, json: bool) {
