@@ -1,5 +1,4 @@
 use std::{
-    collections::HashMap,
     env,
     path::Path,
     process, thread,
@@ -134,7 +133,7 @@ fn watch_folder(path: &Path, json: bool, excludes: &[String]) {
         println!("{DIM}Watching folder: {}{RESET}\n", path.display());
     }
 
-    let mut prev: HashMap<String, Option<SystemTime>> = snapshot(path, excludes);
+    let mut prev = snapshot(path, excludes);
 
     loop {
         thread::sleep(Duration::from_millis(500));

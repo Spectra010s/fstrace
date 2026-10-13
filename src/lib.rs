@@ -44,14 +44,90 @@ impl Event {
 /// `None` is still tracked (not skipped) so a file flipping between
 /// unreadable and readable registers as modified rather than vanishing.
 pub fn mtime(path: &Path) -> Option<SystemTime> {
-    fs::metadata(path).ok()?.modified().ok()
+    stat(path).0
 }
 
-/// Map of `path -> mtime` for every file under `dir`, skipping `excludes`
-/// (see [`matches_exclude`] for the matching rules).
-pub fn snapshot(dir: &Path, excludes: &[String]) -> HashMap<String, Option<SystemTime>> {
+/// File size of `path`, or `0` when unreadable.
+pub fn fsize(path: &Path) -> u64 {
+    stat(path).1
+}
+
+// One metadata call serves both mtime and size: two separate stats per
+// file per poll would double syscalls on large trees for no reason.
+fn stat(path: &Path) -> (Option<SystemTime>, u64) {
+    match fs::metadata(path) {
+        Ok(m) => (m.modified().ok(), m.len()),
+        Err(_) => (None, 0),
+    }
+}
+
+/// Files at or below this size get content-hashed by [`snapshot_hashed`].
+/// Larger files skip hashing: re-reading gigabytes every poll would cost
+/// more than the misses it prevents.
+pub const MAX_HASH_BYTES: u64 = 4 * 1024 * 1024;
+
+/// Fingerprint of `path`'s content, or `None` when unreadable or larger
+/// than [`MAX_HASH_BYTES`]. Deterministic FNV-1a (hand-rolled to keep the
+/// zero-dependency core): identical content hashes identically across
+/// polls and processes, which change detection requires. A randomized
+/// hasher would report every file modified on every poll.
+pub fn fhash(path: &Path) -> Option<u64> {
+    use std::io::Read;
+
+    let mut file = fs::File::open(path).ok()?;
+    if file.metadata().ok()?.len() > MAX_HASH_BYTES {
+        return None;
+    }
+    let mut hash: u64 = 0xcbf29ce484222325;
+    let mut buf = [0u8; 8192];
+    loop {
+        match file.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => {
+                for byte in &buf[..n] {
+                    hash ^= *byte as u64;
+                    hash = hash.wrapping_mul(0x100000001b3);
+                }
+            }
+            Err(_) => return None,
+        }
+    }
+    Some(hash)
+}
+
+/// Tracked state of one file. Compared wholesale: any field differing
+/// between snapshots counts as modified. `modified` alone misses
+/// same-stamp rewrites (issue #3); `size` catches most of those, and
+/// `hash`, filled only by [`snapshot_hashed`], catches the rest.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileState {
+    pub modified: Option<SystemTime>,
+    pub size: u64,
+    pub hash: Option<u64>,
+}
+
+/// Map of `path -> state` for every file under `dir`, skipping `excludes`
+/// (see [`matches_exclude`] for the matching rules). Tracks mtime plus
+/// size, so same-stamp rewrites of different sizes are caught. Deliberately
+/// no content hashing: the default stays as cheap as the v1 CLI (one
+/// metadata call per file). Reach for [`snapshot_hashed`] when same-size
+/// rewrites must be caught too.
+pub fn snapshot(dir: &Path, excludes: &[String]) -> HashMap<String, FileState> {
+    snapshot_inner(dir, excludes, false)
+}
+
+/// Like [`snapshot`], but also fingerprints file contents (up to
+/// [`MAX_HASH_BYTES`]). Costs a read per file per poll, so use it for
+/// source trees, not for gigabytes of assets.
+pub fn snapshot_hashed(dir: &Path, excludes: &[String]) -> HashMap<String, FileState> {
+    snapshot_inner(dir, excludes, true)
+}
+
+// Single collection path for both modes: two copies would drift apart the
+// first time someone fixes a bug in one and forgets the other.
+fn snapshot_inner(dir: &Path, excludes: &[String], hash: bool) -> HashMap<String, FileState> {
     let mut map = HashMap::new();
-    collect(dir, &mut map, excludes);
+    collect(dir, &mut map, excludes, hash);
     map
 }
 
@@ -81,7 +157,7 @@ pub fn matches_exclude(path: &str, name: &str, pattern: &str) -> bool {
 /// zero-dependency core. Two deliberate limits, documented so nobody
 /// "fixes" them by accident:
 /// - byte-wise: `?` spans one byte, not one Unicode char (no panic risk,
-///   only imprecision on non-ASCII names — fine for an exclude filter);
+///   only imprecision on non-ASCII names, fine for an exclude filter);
 /// - `*` spans `/`, so `*.log` also matches `deep/app.log` and `dist/**`
 ///   matches every `dist` tree (matched anywhere-below-root by the caller).
 fn glob_match(pattern: &str, text: &str) -> bool {
@@ -112,7 +188,7 @@ fn glob_match(pattern: &str, text: &str) -> bool {
 
 // Walk `dir` into `map`. Unreadable directories are skipped silently:
 // one permission-denied folder must not kill the whole watch.
-fn collect(dir: &Path, map: &mut HashMap<String, Option<SystemTime>>, excludes: &[String]) {
+fn collect(dir: &Path, map: &mut HashMap<String, FileState>, excludes: &[String], hash: bool) {
     if let Ok(entries) = fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
@@ -124,10 +200,14 @@ fn collect(dir: &Path, map: &mut HashMap<String, Option<SystemTime>>, excludes: 
             }
 
             if path.is_file() {
-                let modified = mtime(&path);
-                map.insert(path_str.into_owned(), modified);
+                let state = FileState {
+                    modified: mtime(&path),
+                    size: fsize(&path),
+                    hash: if hash { fhash(&path) } else { None },
+                };
+                map.insert(path_str.into_owned(), state);
             } else if path.is_dir() {
-                collect(&path, map, excludes);
+                collect(&path, map, excludes, hash);
             }
         }
     }
@@ -138,16 +218,13 @@ fn collect(dir: &Path, map: &mut HashMap<String, Option<SystemTime>>, excludes: 
 /// Two passes because the questions differ: created/modified ask "what's
 /// in curr that's new or changed", deleted asks "what's in prev that's
 /// gone from curr".
-pub fn diff(
-    prev: &HashMap<String, Option<SystemTime>>,
-    curr: &HashMap<String, Option<SystemTime>>,
-) -> Vec<Event> {
+pub fn diff(prev: &HashMap<String, FileState>, curr: &HashMap<String, FileState>) -> Vec<Event> {
     let mut events = Vec::new();
 
-    for (key, modified) in curr {
+    for (key, state) in curr {
         match prev.get(key) {
             None => events.push(Event::Created { path: key.clone() }),
-            Some(old) if old != modified => events.push(Event::Modified { path: key.clone() }),
+            Some(old) if old != state => events.push(Event::Modified { path: key.clone() }),
             _ => {}
         }
     }
@@ -166,12 +243,24 @@ mod tests {
     use super::*;
     use std::time::{Duration, UNIX_EPOCH};
 
-    fn snap(pairs: &[(&str, Option<SystemTime>)]) -> HashMap<String, Option<SystemTime>> {
-        pairs.iter().map(|(k, v)| (k.to_string(), *v)).collect()
+    fn snap(pairs: &[(&str, FileState)]) -> HashMap<String, FileState> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.clone()))
+            .collect()
     }
 
     fn t(secs: u64) -> Option<SystemTime> {
         Some(UNIX_EPOCH + Duration::from_secs(secs))
+    }
+
+    // Plain snapshot state: mtime + size, no hash. This is what `snapshot` records.
+    fn st(secs: u64, size: u64) -> FileState {
+        FileState {
+            modified: t(secs),
+            size,
+            hash: None,
+        }
     }
 
     fn event_path(e: &Event) -> &str {
@@ -182,8 +271,8 @@ mod tests {
 
     #[test]
     fn detects_created_modified_deleted() {
-        let prev = snap(&[("a", t(1)), ("b", t(1)), ("c", t(1))]);
-        let curr = snap(&[("a", t(1)), ("b", t(2)), ("d", t(1))]);
+        let prev = snap(&[("a", st(1, 10)), ("b", st(1, 10)), ("c", st(1, 10))]);
+        let curr = snap(&[("a", st(1, 10)), ("b", st(2, 10)), ("d", st(1, 10))]);
         let mut events = diff(&prev, &curr);
         events.sort_by(|a, b| (a.kind(), event_path(a)).cmp(&(b.kind(), event_path(b))));
         assert_eq!(
@@ -198,15 +287,78 @@ mod tests {
 
     #[test]
     fn identical_snapshots_emit_nothing() {
-        let prev = snap(&[("a", t(1))]);
-        let curr = snap(&[("a", t(1))]);
+        let prev = snap(&[("a", st(1, 10))]);
+        let curr = snap(&[("a", st(1, 10))]);
         assert!(diff(&prev, &curr).is_empty());
     }
 
     #[test]
+    fn same_stamp_different_size_counts_as_modified() {
+        // The live-caught case class: timestamp unchanged, content changed.
+        let prev = snap(&[("a", st(1, 10))]);
+        let curr = snap(&[("a", st(1, 20))]);
+        assert_eq!(
+            diff(&prev, &curr),
+            vec![Event::Modified { path: "a".into() }]
+        );
+    }
+
+    #[test]
+    fn same_stamp_same_size_different_hash_counts_as_modified() {
+        // Strongest case from the field: v1 -> v2 rewrites that keep both
+        // stamp and size. Only the fingerprint sees them, which is why the
+        // hash exists at all.
+        let prev = snap(&[(
+            "a",
+            FileState {
+                modified: t(1),
+                size: 2,
+                hash: Some(111),
+            },
+        )]);
+        let curr = snap(&[(
+            "a",
+            FileState {
+                modified: t(1),
+                size: 2,
+                hash: Some(222),
+            },
+        )]);
+        assert_eq!(
+            diff(&prev, &curr),
+            vec![Event::Modified { path: "a".into() }]
+        );
+    }
+
+    #[test]
+    fn hash_is_deterministic_across_calls() {
+        // Regression: a randomized hasher reports every file modified on
+        // every poll. Same content must hash identically, always.
+        let dir = std::env::temp_dir().join(format!("fstrace-hash-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let a = dir.join("a.txt");
+        let b = dir.join("b.txt");
+        std::fs::write(&a, "same content").unwrap();
+        std::fs::write(&b, "same content").unwrap();
+        std::fs::write(&dir.join("c.txt"), "different").unwrap();
+        assert_eq!(fhash(&a), fhash(&b));
+        assert_eq!(fhash(&a), fhash(&a));
+        assert_ne!(fhash(&a), fhash(&dir.join("c.txt")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn unreadable_mtime_change_counts_as_modified() {
-        let prev = snap(&[("a", None)]);
-        let curr = snap(&[("a", t(5))]);
+        let prev = snap(&[(
+            "a",
+            FileState {
+                modified: None,
+                size: 10,
+                hash: None,
+            },
+        )]);
+        let curr = snap(&[("a", st(5, 10))]);
         assert_eq!(
             diff(&prev, &curr),
             vec![Event::Modified { path: "a".into() }]
