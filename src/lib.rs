@@ -5,8 +5,8 @@
 //! change detection), compare with [`diff`] (or [`diff_ordered`] for stable
 //! output), filter with [`matches_exclude`]. You drive the loop and timing.
 //!
-//! Polling (not OS event hooks) is deliberate: zero dependencies and
-//! identical behavior on every platform the CLI ships to.
+//! Polling (not OS event hooks) is deliberate: identical behavior on
+//! every platform the CLI ships to.
 //!
 //! ```no_run
 //! use std::path::Path;
@@ -91,10 +91,10 @@ fn stat(path: &Path) -> (Option<SystemTime>, u64) {
 pub const MAX_HASH_BYTES: u64 = 4 * 1024 * 1024;
 
 /// Fingerprint of `path`'s content, or `None` when unreadable or larger
-/// than [`MAX_HASH_BYTES`]. Deterministic FNV-1a (hand-rolled to keep the
-/// zero-dependency core): identical content hashes identically across
-/// polls and processes, which change detection requires. A randomized
-/// hasher would report every file modified on every poll.
+/// than [`MAX_HASH_BYTES`]. Deterministic FNV-1a, hand-rolled: identical
+/// content hashes identically across polls and processes, which change
+/// detection requires. A randomized hasher would report every file
+/// modified on every poll.
 pub fn fhash(path: &Path) -> Option<u64> {
     use std::io::Read;
 
@@ -178,9 +178,8 @@ pub fn matches_exclude(path: &str, name: &str, pattern: &str) -> bool {
 }
 
 /// Minimal glob: `*` spans any characters (including `/`), `?` spans one.
-/// Hand-rolled backtracking instead of a regex/glob crate to keep the
-/// zero-dependency core. Two deliberate limits, documented so nobody
-/// "fixes" them by accident:
+/// Hand-rolled backtracking matcher. Two limits worth knowing, documented
+/// so nobody "fixes" them by accident:
 /// - byte-wise: `?` spans one byte, not one Unicode char (no panic risk,
 ///   only imprecision on non-ASCII names, fine for an exclude filter);
 /// - `*` spans `/`, so `*.log` also matches `deep/app.log` and `dist/**`
