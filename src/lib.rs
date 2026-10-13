@@ -1,4 +1,4 @@
-//! fstrace library: low-level filesystem snapshot + diff primitives.
+//! fstrace library: A lightweight file system watcher for files and folders.
 //!
 //! The polling engine behind the `fstrace` CLI, exposed for embedding.
 //! Capture with [`snapshot`] (or [`snapshot_hashed`] for fingerprint-level
