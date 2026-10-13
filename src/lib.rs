@@ -23,7 +23,7 @@ use std::{
     collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
-    time::SystemTime,
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 /// A single filesystem change between two snapshots.
@@ -43,6 +43,15 @@ impl Event {
             Event::Deleted { .. } => "deleted",
         }
     }
+}
+
+/// Current Unix timestamp in seconds. Shared helper so every consumer
+/// stamps events the same way instead of rolling its own clock.
+pub fn timestamp() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }
 
 /// Last-modified time of `path`, or `None` when unreadable.
