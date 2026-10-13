@@ -1,5 +1,7 @@
 # fstrace
 
+[![CI](https://github.com/Spectra010s/fstrace/actions/workflows/ci.yml/badge.svg)](https://github.com/Spectra010s/fstrace/actions)
+
 A lightweight file system watcher for files and folders, as a CLI and a Rust library.
 
 - [CLI usage](#usage)
