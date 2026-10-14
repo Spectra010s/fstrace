@@ -129,7 +129,23 @@ jobs:
             "name": "@hiverra/fstrace",
             "version": "$VERSION",
             "description": "A lightweight file system watcher for files and folders.",
+            "author": {
+              "name": "Adeloye Adetayo",
+              "url": "https://spectra010s.com"
+            },
+            "keywords": [
+              "fstrace",
+              "file-watcher",
+              "watch",
+              "filesystem",
+              "cli",
+              "hiverra"
+            ],
             "license": "MIT",
+            "repository": {
+              "type": "git",
+              "url": "https://github.com/Spectra010s/fstrace"
+            },
             "bin": {
               "fstrace": "bin/fstrace.js"
             },
@@ -137,7 +153,10 @@ jobs:
               "bin/**",
               "README.md",
               "LICENSE"
-            ]
+            ],
+            "engines": {
+              "node": ">=14"
+            }
           }
           EOF
 
