@@ -2,6 +2,7 @@ name: Publish fstrace to npm
 
 permissions:
   contents: write
+  id-token: write
 
 on:
   workflow_run:
@@ -169,5 +170,3 @@ jobs:
         run: |
           cd npm_pkg
           npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
