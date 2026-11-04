@@ -53,7 +53,7 @@ cargo install --path .
 ## As a library
 
 ```toml
-fstrace = "1.1"
+fstrace = "1.2"
 ```
 
 ```rust
