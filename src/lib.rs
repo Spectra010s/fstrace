@@ -119,15 +119,28 @@ pub fn fhash(path: &Path) -> Option<u64> {
     Some(hash)
 }
 
-/// Tracked state of one file. Compared wholesale: any field differing
+/// What kind of entry a path is. Recorded with `symlink_metadata`, so
+/// links are classified, never followed. (Dir arrives with empty-folder
+/// support, separately decided.)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EntryKind {
+    File,
+    Symlink,
+}
+
+/// Tracked state of one path. Compared wholesale: any field differing
 /// between snapshots counts as modified. `modified` alone misses
 /// same-stamp rewrites (issue #3); `size` catches most of those, and
 /// `hash`, filled only by [`snapshot_hashed`], catches the rest.
+/// `kind` plus `target` record links as links: a link changing target,
+/// or a file replaced by a link, registers as modified.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileState {
     pub modified: Option<SystemTime>,
     pub size: u64,
     pub hash: Option<u64>,
+    pub kind: EntryKind,
+    pub target: Option<String>,
 }
 
 /// Map of `path -> state` for every file under `dir`, skipping `excludes`
@@ -239,11 +252,35 @@ fn collect(
                 continue;
             }
 
+            // symlink_metadata classifies without following: links are
+            // recorded, never traversed, so dir links cannot cycle and
+            // dangling links stop vanishing silently.
+            let meta = fs::symlink_metadata(&path);
+            let file_type = meta.as_ref().ok().map(|m| m.file_type());
+            if let Some(ft) = file_type
+                && ft.is_symlink()
+            {
+                let target = fs::read_link(&path)
+                    .map(|t| t.to_string_lossy().into_owned())
+                    .ok();
+                let state = FileState {
+                    modified: mtime(&path),
+                    size: fsize(&path),
+                    hash: None,
+                    kind: EntryKind::Symlink,
+                    target,
+                };
+                map.insert(path_str.into_owned(), state);
+                continue;
+            }
+
             if path.is_file() {
                 let state = FileState {
                     modified: mtime(&path),
                     size: fsize(&path),
                     hash: if hash { fhash(&path) } else { None },
+                    kind: EntryKind::File,
+                    target: None,
                 };
                 map.insert(path_str.into_owned(), state);
             } else if path.is_dir() {
@@ -312,6 +349,8 @@ mod tests {
             modified: t(secs),
             size,
             hash: None,
+            kind: EntryKind::File,
+            target: None,
         }
     }
 
@@ -391,6 +430,8 @@ mod tests {
                 modified: t(1),
                 size: 2,
                 hash: Some(111),
+                kind: EntryKind::File,
+                target: None,
             },
         )]);
         let curr = snap(&[(
@@ -399,6 +440,8 @@ mod tests {
                 modified: t(1),
                 size: 2,
                 hash: Some(222),
+                kind: EntryKind::File,
+                target: None,
             },
         )]);
         assert_eq!(
@@ -442,6 +485,46 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
+    fn links_snapshot_as_links_with_targets() {
+        // File link, dir link, and dangling link: recorded, never followed.
+        // Unix-only: creating symlinks needs privileges on Windows.
+        let dir = std::env::temp_dir().join(format!("fstrace-links-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let sub = dir.join("sub");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(dir.join("real.txt"), "data").unwrap();
+        std::fs::write(sub.join("inner.txt"), "data").unwrap();
+        std::os::unix::fs::symlink(dir.join("real.txt"), dir.join("file-link")).unwrap();
+        std::os::unix::fs::symlink(&sub, dir.join("dir-link")).unwrap();
+        std::os::unix::fs::symlink(dir.join("missing"), dir.join("dead-link")).unwrap();
+
+        let map = snapshot(&dir, &[]);
+        let file_link = map
+            .keys()
+            .find(|k| k.ends_with("file-link"))
+            .and_then(|k| map.get(k))
+            .unwrap();
+        assert_eq!(file_link.kind, EntryKind::Symlink);
+        assert!(file_link.target.as_ref().unwrap().ends_with("real.txt"));
+        let dir_link = map
+            .keys()
+            .find(|k| k.ends_with("dir-link"))
+            .and_then(|k| map.get(k))
+            .unwrap();
+        assert_eq!(dir_link.kind, EntryKind::Symlink);
+        // Traversed contents must NOT appear: links are recorded, not walked.
+        assert!(!map.keys().any(|k| k.contains("dir-link/inner.txt")));
+        let dead = map
+            .keys()
+            .find(|k| k.ends_with("dead-link"))
+            .and_then(|k| map.get(k))
+            .unwrap();
+        assert_eq!(dead.kind, EntryKind::Symlink);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn unreadable_mtime_change_counts_as_modified() {
         let prev = snap(&[(
             "a",
@@ -449,6 +532,8 @@ mod tests {
                 modified: None,
                 size: 10,
                 hash: None,
+                kind: EntryKind::File,
+                target: None,
             },
         )]);
         let curr = snap(&[("a", st(5, 10))]);
