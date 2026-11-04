@@ -1,6 +1,6 @@
 [package]
 name = "fstrace"
-version = "1.1.0"
+version = "1.2.0"
 description = "A lightweight file system watcher for files and folders, as a CLI and a Rust library."
 edition = "2024"
 authors = ["Adeloye Adetayo"]
