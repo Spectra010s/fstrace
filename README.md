@@ -162,6 +162,12 @@ fstrace started as a personal experiment: watch a folder, track the changes, and
 
 ---
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Bug reports and feature requests can use the issue forms.
+
+---
+
 ## License
 
 MIT — see the [LICENSE](LICENSE) file for details.

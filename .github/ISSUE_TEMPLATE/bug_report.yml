@@ -1,0 +1,64 @@
+name: Bug report
+description: Report something that is not working
+title: "[bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Include a minimal reproduction. Remove private paths and file contents before posting.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened
+      description: What went wrong, including the exact output or error.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction
+      description: The command or API call, plus the smallest file or tree that triggers it.
+      render: shell
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: fstrace version
+      description: Output of `fstrace --version`, or the commit you built.
+      placeholder: "fstrace v1.2.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: Installation
+      options:
+        - cargo install
+        - npm
+        - installer script
+        - built from source
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      description: Operating system and version, or target triple.
+      placeholder: "Ubuntu 24.04, x86_64"
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checklist
+      options:
+        - label: I searched existing issues for the same problem.
+          required: true
