@@ -16,6 +16,6 @@ display-name = "fstrace"
 # Path that installers should place binaries in
 install-path = "CARGO_HOME"
 # Custom message to display on successful install
-install-success-msg = "fstracw installed successfully!, start watching."
+install-success-msg = "fstrace installed successfully! Start watching."
 # Whether to install an updater program
 install-updater = false
