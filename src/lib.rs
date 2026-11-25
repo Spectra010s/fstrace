@@ -89,7 +89,7 @@ fn stat(path: &Path) -> (Option<SystemTime>, u64) {
 }
 
 // Permission bits from metadata already read by the caller. Use
-// `symlink_metadata` at the call site so a link reports its own mode.
+// `symlink_metadata` at the call site so a symlink reports its own mode.
 #[cfg(unix)]
 fn mode_of(meta: &fs::Metadata) -> Option<u32> {
     Some(meta.permissions().mode())
@@ -137,7 +137,7 @@ pub fn fhash(path: &Path) -> Option<u64> {
 }
 
 /// What kind of entry a path is. Recorded with `symlink_metadata`, so
-/// links are classified, never followed.
+/// symlinks are classified, never followed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EntryKind {
     File,
@@ -149,11 +149,11 @@ pub enum EntryKind {
 /// between snapshots counts as modified. `modified` alone misses
 /// same-stamp rewrites (issue #3); `size` catches most of those, and
 /// `hash`, filled only by [`snapshot_hashed`], catches the rest.
-/// `kind` plus `target` record links as links: a link changing target,
-/// or a file replaced by a link, registers as modified. `mode` records
-/// permission bits so a chmod alone registers too. Directory entries
-/// track presence and mode only: `modified` and `size` stay empty so a
-/// child change is not reported as a parent modification.
+/// `kind` plus `target` record symlinks as symlinks: a symlink changing
+/// target, or a file replaced by a symlink, registers as modified. `mode`
+/// records permission bits so a chmod alone registers too. Directory
+/// entries track presence and mode only: `modified` and `size` stay
+/// empty so a child change is not reported as a parent modification.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileState {
     pub modified: Option<SystemTime>,
@@ -161,7 +161,7 @@ pub struct FileState {
     pub hash: Option<u64>,
     pub kind: EntryKind,
     pub target: Option<String>,
-    /// Permission bits from `symlink_metadata`, so a link reports its own
+    /// Permission bits from `symlink_metadata`, so a symlink reports its own
     /// mode rather than its target's. `None` on non-Unix platforms.
     pub mode: Option<u32>,
 }
@@ -275,9 +275,9 @@ fn collect(
                 continue;
             }
 
-            // symlink_metadata classifies without following: links are
-            // recorded, never traversed, so dir links cannot cycle and
-            // dangling links stop vanishing silently.
+            // symlink_metadata classifies without following: symlinks are
+            // recorded, never traversed, so directory symlinks cannot cycle
+            // and dangling symlinks stop vanishing silently.
             let meta = fs::symlink_metadata(&path);
             let file_type = meta.as_ref().ok().map(|m| m.file_type());
             if let Some(ft) = file_type
@@ -620,9 +620,10 @@ mod tests {
 
     #[test]
     #[cfg(unix)]
-    fn links_snapshot_as_links_with_targets() {
-        // File link, dir link, and dangling link: recorded, never followed.
-        // Unix-only: creating symlinks needs privileges on Windows.
+    fn symlinks_snapshot_as_symlinks_with_targets() {
+        // File symlink, directory symlink, and dangling symlink: recorded,
+        // never followed. Unix-only: creating symlinks needs privileges on
+        // Windows.
         let dir = std::env::temp_dir().join(format!("fstrace-links-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let sub = dir.join("sub");
@@ -640,20 +641,20 @@ mod tests {
             .and_then(|k| map.get(k))
             .unwrap();
         assert_eq!(sub_entry.kind, EntryKind::Dir);
-        let file_link = map
+        let file_symlink = map
             .keys()
             .find(|k| k.ends_with("file-link"))
             .and_then(|k| map.get(k))
             .unwrap();
-        assert_eq!(file_link.kind, EntryKind::Symlink);
-        assert!(file_link.target.as_ref().unwrap().ends_with("real.txt"));
-        let dir_link = map
+        assert_eq!(file_symlink.kind, EntryKind::Symlink);
+        assert!(file_symlink.target.as_ref().unwrap().ends_with("real.txt"));
+        let dir_symlink = map
             .keys()
             .find(|k| k.ends_with("dir-link"))
             .and_then(|k| map.get(k))
             .unwrap();
-        assert_eq!(dir_link.kind, EntryKind::Symlink);
-        // Traversed contents must NOT appear: links are recorded, not walked.
+        assert_eq!(dir_symlink.kind, EntryKind::Symlink);
+        // Traversed contents must NOT appear: symlinks are recorded, not walked.
         assert!(!map.keys().any(|k| k.contains("dir-link/inner.txt")));
         let dead = map
             .keys()
