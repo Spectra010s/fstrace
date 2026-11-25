@@ -137,12 +137,12 @@ pub fn fhash(path: &Path) -> Option<u64> {
 }
 
 /// What kind of entry a path is. Recorded with `symlink_metadata`, so
-/// links are classified, never followed. (Dir arrives with empty-folder
-/// support, separately decided.)
+/// links are classified, never followed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EntryKind {
     File,
     Symlink,
+    Dir,
 }
 
 /// Tracked state of one path. Compared wholesale: any field differing
@@ -151,7 +151,9 @@ pub enum EntryKind {
 /// `hash`, filled only by [`snapshot_hashed`], catches the rest.
 /// `kind` plus `target` record links as links: a link changing target,
 /// or a file replaced by a link, registers as modified. `mode` records
-/// permission bits so a chmod alone registers too.
+/// permission bits so a chmod alone registers too. Directory entries
+/// track presence and mode only: `modified` and `size` stay empty so a
+/// child change is not reported as a parent modification.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileState {
     pub modified: Option<SystemTime>,
@@ -164,11 +166,11 @@ pub struct FileState {
     pub mode: Option<u32>,
 }
 
-/// Map of `path -> state` for every file under `dir`, skipping `excludes`
+/// Map of `path -> state` for every entry under `dir`, skipping `excludes`
 /// (see [`matches_exclude`] for the matching rules). Tracks mtime, size,
 /// and mode, so same-stamp rewrites and chmod changes are caught.
 /// Deliberately no content hashing: the default stays as cheap as the v1
-/// CLI (one metadata call per file). Reach for [`snapshot_hashed`] when
+/// CLI (one metadata call per entry). Reach for [`snapshot_hashed`] when
 /// same-size rewrites must be caught too.
 pub fn snapshot(dir: &Path, excludes: &[String]) -> HashMap<String, FileState> {
     snapshot_inner(dir, excludes, false)
@@ -307,6 +309,18 @@ fn collect(
                 };
                 map.insert(path_str.into_owned(), state);
             } else if path.is_dir() {
+                // Directories track presence and mode only. Their mtime
+                // and size move whenever a child changes, which would
+                // report the parent alongside every child event.
+                let state = FileState {
+                    modified: None,
+                    size: 0,
+                    hash: None,
+                    kind: EntryKind::Dir,
+                    target: None,
+                    mode: meta.as_ref().ok().and_then(mode_of),
+                };
+                map.insert(path_str.into_owned(), state);
                 collect(&path, map, excludes, hash, visited);
             }
         }
@@ -376,6 +390,17 @@ mod tests {
             kind: EntryKind::File,
             target: None,
             mode: Some(0o644),
+        }
+    }
+
+    fn dir_st() -> FileState {
+        FileState {
+            modified: None,
+            size: 0,
+            hash: None,
+            kind: EntryKind::Dir,
+            target: None,
+            mode: Some(0o755),
         }
     }
 
@@ -503,6 +528,63 @@ mod tests {
     }
 
     #[test]
+    fn empty_directory_is_recorded() {
+        let dir = std::env::temp_dir().join(format!("fstrace-dirs-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("empty").join("nested")).unwrap();
+
+        let map = snapshot(&dir, &[]);
+        let find = |name: &str| {
+            map.iter()
+                .find(|(k, _)| k.ends_with(name))
+                .map(|(_, s)| s)
+                .unwrap()
+        };
+        assert_eq!(find("empty").kind, EntryKind::Dir);
+        assert_eq!(find("nested").kind, EntryKind::Dir);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn directory_removal_is_reported() {
+        let prev = snap(&[("d", dir_st())]);
+        let curr = snap(&[]);
+        assert_eq!(
+            diff(&prev, &curr),
+            vec![Event::Deleted { path: "d".into() }]
+        );
+    }
+
+    #[test]
+    fn child_change_does_not_modify_parent() {
+        // Directory mtime moves with every child write. Leaving it out of
+        // dir state keeps the child event from arriving with a parent one.
+        let dir = std::env::temp_dir().join(format!("fstrace-dir-child-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let sub = dir.join("sub");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(sub.join("first.txt"), "one").unwrap();
+
+        let prev = snapshot(&dir, &[]);
+        std::fs::write(sub.join("second.txt"), "two").unwrap();
+        let curr = snapshot(&dir, &[]);
+
+        let state = |map: &HashMap<String, FileState>| {
+            map.iter()
+                .find(|(k, _)| k.ends_with("sub"))
+                .map(|(_, s)| s.clone())
+                .unwrap()
+        };
+        assert_eq!(state(&prev), state(&curr));
+
+        let events = diff(&prev, &curr);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind(), "created");
+        assert!(events[0].path().ends_with("second.txt"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn hash_is_deterministic_across_calls() {
         // Regression: a randomized hasher reports every file modified on
         // every poll. Same content must hash identically, always.
@@ -552,6 +634,12 @@ mod tests {
         std::os::unix::fs::symlink(dir.join("missing"), dir.join("dead-link")).unwrap();
 
         let map = snapshot(&dir, &[]);
+        let sub_entry = map
+            .keys()
+            .find(|k| k.ends_with("sub"))
+            .and_then(|k| map.get(k))
+            .unwrap();
+        assert_eq!(sub_entry.kind, EntryKind::Dir);
         let file_link = map
             .keys()
             .find(|k| k.ends_with("file-link"))

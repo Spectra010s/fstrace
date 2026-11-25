@@ -114,11 +114,13 @@ fstrace ./myproject --exclude node_modules --json
 
 ## Events
 
-| Event      | Description         |
-|------------|---------------------|
-| `created`  | A file was created  |
-| `modified` | A file was modified |
-| `deleted`  | A file was deleted  |
+| Event      | Description                              |
+|------------|------------------------------------------|
+| `created`  | A file, directory, or link was created  |
+| `modified` | A file, directory, or link was modified |
+| `deleted`  | A file, directory, or link was deleted  |
+
+Snapshots include directories, so empty directories produce events too.
 
 ---
 
