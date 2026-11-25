@@ -28,6 +28,9 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
 /// A single filesystem change between two snapshots.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
@@ -85,6 +88,20 @@ fn stat(path: &Path) -> (Option<SystemTime>, u64) {
     }
 }
 
+// Permission bits from metadata already read by the caller. Use
+// `symlink_metadata` at the call site so a link reports its own mode.
+#[cfg(unix)]
+fn mode_of(meta: &fs::Metadata) -> Option<u32> {
+    Some(meta.permissions().mode())
+}
+
+// No portable permission bits: Windows exposes only the readonly flag,
+// and mapping it to Unix-style bits would invent information.
+#[cfg(not(unix))]
+fn mode_of(_meta: &fs::Metadata) -> Option<u32> {
+    None
+}
+
 /// Files at or below this size get content-hashed by [`snapshot_hashed`].
 /// Larger files skip hashing: re-reading gigabytes every poll would cost
 /// more than the misses it prevents.
@@ -133,7 +150,8 @@ pub enum EntryKind {
 /// same-stamp rewrites (issue #3); `size` catches most of those, and
 /// `hash`, filled only by [`snapshot_hashed`], catches the rest.
 /// `kind` plus `target` record links as links: a link changing target,
-/// or a file replaced by a link, registers as modified.
+/// or a file replaced by a link, registers as modified. `mode` records
+/// permission bits so a chmod alone registers too.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileState {
     pub modified: Option<SystemTime>,
@@ -141,14 +159,17 @@ pub struct FileState {
     pub hash: Option<u64>,
     pub kind: EntryKind,
     pub target: Option<String>,
+    /// Permission bits from `symlink_metadata`, so a link reports its own
+    /// mode rather than its target's. `None` on non-Unix platforms.
+    pub mode: Option<u32>,
 }
 
 /// Map of `path -> state` for every file under `dir`, skipping `excludes`
-/// (see [`matches_exclude`] for the matching rules). Tracks mtime plus
-/// size, so same-stamp rewrites of different sizes are caught. Deliberately
-/// no content hashing: the default stays as cheap as the v1 CLI (one
-/// metadata call per file). Reach for [`snapshot_hashed`] when same-size
-/// rewrites must be caught too.
+/// (see [`matches_exclude`] for the matching rules). Tracks mtime, size,
+/// and mode, so same-stamp rewrites and chmod changes are caught.
+/// Deliberately no content hashing: the default stays as cheap as the v1
+/// CLI (one metadata call per file). Reach for [`snapshot_hashed`] when
+/// same-size rewrites must be caught too.
 pub fn snapshot(dir: &Path, excludes: &[String]) -> HashMap<String, FileState> {
     snapshot_inner(dir, excludes, false)
 }
@@ -269,6 +290,7 @@ fn collect(
                     hash: None,
                     kind: EntryKind::Symlink,
                     target,
+                    mode: meta.as_ref().ok().and_then(mode_of),
                 };
                 map.insert(path_str.into_owned(), state);
                 continue;
@@ -281,6 +303,7 @@ fn collect(
                     hash: if hash { fhash(&path) } else { None },
                     kind: EntryKind::File,
                     target: None,
+                    mode: meta.as_ref().ok().and_then(mode_of),
                 };
                 map.insert(path_str.into_owned(), state);
             } else if path.is_dir() {
@@ -343,7 +366,8 @@ mod tests {
         Some(UNIX_EPOCH + Duration::from_secs(secs))
     }
 
-    // Plain snapshot state: mtime + size, no hash. This is what `snapshot` records.
+    // Plain snapshot state: mtime + size + mode, no hash. This is what
+    // `snapshot` records.
     fn st(secs: u64, size: u64) -> FileState {
         FileState {
             modified: t(secs),
@@ -351,6 +375,7 @@ mod tests {
             hash: None,
             kind: EntryKind::File,
             target: None,
+            mode: Some(0o644),
         }
     }
 
@@ -432,6 +457,7 @@ mod tests {
                 hash: Some(111),
                 kind: EntryKind::File,
                 target: None,
+                mode: Some(0o644),
             },
         )]);
         let curr = snap(&[(
@@ -442,12 +468,38 @@ mod tests {
                 hash: Some(222),
                 kind: EntryKind::File,
                 target: None,
+                mode: Some(0o644),
             },
         )]);
         assert_eq!(
             diff(&prev, &curr),
             vec![Event::Modified { path: "a".into() }]
         );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn chmod_alone_counts_as_modified() {
+        // Mode is part of state: changing it must produce an event even
+        // when content, size, and mtime stay put.
+        let dir = std::env::temp_dir().join(format!("fstrace-mode-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("a.txt");
+        std::fs::write(&file, "data").unwrap();
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        let prev = snapshot(&dir, &[]);
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let curr = snapshot(&dir, &[]);
+
+        assert_eq!(
+            diff(&prev, &curr),
+            vec![Event::Modified {
+                path: file.to_string_lossy().into_owned()
+            }]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -534,6 +586,7 @@ mod tests {
                 hash: None,
                 kind: EntryKind::File,
                 target: None,
+                mode: Some(0o644),
             },
         )]);
         let curr = snap(&[("a", st(5, 10))]);
