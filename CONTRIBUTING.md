@@ -58,7 +58,7 @@ Examples:
 
 ```text
 feat(state): record entry kind and symlink targets
-fix(walk): keep dangling links in snapshots
+fix(walk): keep dangling symlinks in snapshots
 docs(readme): document the library example
 test(diff): cover deletion ordering
 chore(deps): update dependencies
